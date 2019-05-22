@@ -153,7 +153,7 @@ local_notify_neighbour_1(struct local_socket *s,
 
     rc = snprintf(buf, 512,
                   "%s neighbour %lx address %s "
-                  "if %s reach %04x ureach %04x "
+                  "if %s reach %04x %d of %d ureach %04x "
                   "rxcost %u txcost %u%s cost %u\n",
                   local_kind(kind),
                   /* Neighbours never move around in memory , so we can use the
@@ -161,8 +161,10 @@ local_notify_neighbour_1(struct local_socket *s,
                   (unsigned long int)neigh,
                   format_address(neigh->address),
                   neigh->ifp->name,
-                  neigh->hello.reach,
-                  neigh->uhello.reach,
+                  neigh->hello.reach_bitmap.old_reach,
+                  neigh->hello.reach_bitmap.count_set,
+                  neigh->hello.reach_bitmap.count,
+                  neigh->uhello.reach_bitmap.old_reach,
                   neighbour_rxcost(neigh),
                   neighbour_txcost(neigh),
                   rttbuf,

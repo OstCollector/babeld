@@ -15,7 +15,7 @@ SRCS = babeld.c net.c kernel.c util.c interface.c source.c neighbour.c \
 
 OBJS = babeld.o net.o kernel.o util.o interface.o source.o neighbour.o \
        route.o xroute.o message.o resend.o configuration.o local.o \
-       disambiguation.o rule.o
+       disambiguation.o rule.o reach_bitmap.o
 
 babeld: $(OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o babeld $(OBJS) $(LDLIBS)

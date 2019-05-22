@@ -1123,12 +1123,14 @@ dump_tables(FILE *out)
     fprintf(out, "My id %s seqno %d\n", format_eui64(myid), myseqno);
 
     FOR_ALL_NEIGHBOURS(neigh) {
-        fprintf(out, "Neighbour %s dev %s reach %04x ureach %04x "
+        fprintf(out, "Neighbour %s dev %s reach %04x %d of %d ureach %04x "
                 "rxcost %u txcost %d rtt %s rttcost %u chan %d%s.\n",
                 format_address(neigh->address),
                 neigh->ifp->name,
-                neigh->hello.reach,
-                neigh->uhello.reach,
+                neigh->hello.reach_bitmap.old_reach,
+                neigh->hello.reach_bitmap.count_set,
+                neigh->hello.reach_bitmap.count,
+                neigh->uhello.reach_bitmap.old_reach,
                 neighbour_rxcost(neigh),
                 neigh->txcost,
                 format_thousands(neigh->rtt),

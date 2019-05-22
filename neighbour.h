@@ -20,8 +20,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
+#include "reach_bitmap.h"
+
 struct hello_history {
-    unsigned short reach;
+    struct reach_bitmap reach_bitmap;
+    // unsigned short reach;
     unsigned short interval;    /* in centiseconds */
     int seqno;
     struct timeval time;

@@ -141,12 +141,12 @@ update_neighbour(struct neighbour *neigh, struct hello_history *hist,
         timeval_add_msec(&hist->time, &hist->time,
                          missed_hellos * hist->interval * 10);
     } else {
-        if(hist->seqno >= 0 && hist->reach > 0) {
+        if(hist->seqno >= 0 && hist->reach_bitmap.old_reach > 0) {
             missed_hellos = seqno_minus(hello, hist->seqno) - 1;
             if(missed_hellos < -8) {
                 /* Probably a neighbour that rebooted and lost its seqno.
                    Reboot the universe. */
-                hist->reach = 0;
+                reach_bitmap_init(&hist->reach_bitmap);
                 missed_hellos = 0;
                 rc = 1;
             } else if(missed_hellos < 0) {
@@ -155,7 +155,7 @@ update_neighbour(struct neighbour *neigh, struct hello_history *hist,
                    fprintf(stderr,
                         "Late hello: bufferbloated neighbor %s\n",
                          format_address(neigh->address));
-                hist->reach <<= -missed_hellos;
+                reach_bitmap_pop_new(&hist->reach_bitmap, -missed_hellos);
                 missed_hellos = 0;
                 rc = 1;
             }
@@ -169,7 +169,7 @@ update_neighbour(struct neighbour *neigh, struct hello_history *hist,
     }
 
     if(missed_hellos > 0) {
-        hist->reach >>= missed_hellos;
+        reach_bitmap_push_new(&hist->reach_bitmap, 0, missed_hellos);
         hist->seqno = seqno_plus(hist->seqno, missed_hellos);
         missed_hellos = 0;
         rc = 1;
@@ -177,9 +177,8 @@ update_neighbour(struct neighbour *neigh, struct hello_history *hist,
 
     if(hello >= 0) {
         hist->seqno = hello;
-        hist->reach >>= 1;
-        hist->reach |= 0x8000;
-        if((hist->reach & 0xFC00) != 0xFC00)
+        reach_bitmap_push_new(&hist->reach_bitmap, 1, 1);
+        if((hist->reach_bitmap.old_reach & 0xFC00) != 0xFC00)
             rc = 1;
     }
 
@@ -187,13 +186,13 @@ update_neighbour(struct neighbour *neigh, struct hello_history *hist,
         return rc;
 
     /* Make sure to give neighbours some feedback early after association */
-    if((hist->reach & 0xBF00) == 0x8000) {
+    if((hist->reach_bitmap.old_reach & 0xBF00) == 0x8000) {
         /* A new neighbour */
         send_hello(neigh->ifp);
     } else {
         /* Don't send hellos, in order to avoid a positive feedback loop. */
-        int a = (hist->reach & 0xC000);
-        int b = (hist->reach & 0x3000);
+        int a = (hist->reach_bitmap.old_reach & 0xC000);
+        int b = (hist->reach_bitmap.old_reach & 0x3000);
         if((a == 0xC000 && b == 0) || (a == 0 && b == 0x3000)) {
             /* Reachability is either 1100 or 0011 */
             send_self_update(neigh->ifp);
@@ -214,7 +213,7 @@ reset_txcost(struct neighbour *neigh)
         return 0;
 
     /* If we're losing a lot of packets, we probably lost an IHU too */
-    if(delay >= 180000 || (neigh->hello.reach & 0xFFF0) == 0 ||
+    if(delay >= 180000 || (neigh->hello.reach_bitmap.old_reach & 0xFFF0) == 0 ||
        (neigh->ihu_interval > 0 &&
         delay >= neigh->ihu_interval * 10 * 10)) {
         neigh->txcost = INFINITY;
@@ -246,7 +245,7 @@ check_neighbours()
         rc = update_neighbour(neigh, &neigh->uhello, 1, -1, 0);
         changed = changed || rc;
 
-        if(neigh->hello.reach == 0 ||
+        if(neigh->hello.reach_bitmap.old_reach == 0 ||
            neigh->hello.time.tv_sec > now.tv_sec || /* clock stepped */
            timeval_minus_msec(&now, &neigh->hello.time) > 300000) {
             struct neighbour *old = neigh;
@@ -290,8 +289,8 @@ unsigned
 neighbour_rxcost(struct neighbour *neigh)
 {
     unsigned delay, udelay;
-    unsigned short reach = neigh->hello.reach;
-    unsigned short ureach = neigh->uhello.reach;
+    unsigned short reach = neigh->hello.reach_bitmap.old_reach;
+    unsigned short ureach = neigh->uhello.reach_bitmap.old_reach;
 
     delay = timeval_minus_msec(&now, &neigh->hello.time);
     udelay = timeval_minus_msec(&now, &neigh->uhello.time);
@@ -300,16 +299,8 @@ neighbour_rxcost(struct neighbour *neigh)
        ((ureach & 0xFFF0) == 0 || udelay >= 180000)) {
         return INFINITY;
     } else if((neigh->ifp->flags & IF_LQ)) {
-        int sreach =
-            ((reach & 0x8000) >> 2) +
-            ((reach & 0x4000) >> 1) +
-            (reach & 0x3FFF);
-        /* 0 <= sreach <= 0x7FFF */
-        int cost = (0x8000 * neigh->ifp->cost) / (sreach + 1);
-        /* cost >= interface->cost */
-        if(delay >= 40000)
-            cost = (cost * (delay - 20000) + 10000) / 20000;
-        return MIN(cost, INFINITY);
+        return reach_bitmap_metric(&neigh->hello.reach_bitmap,
+                neigh->ifp->cost, delay);
     } else {
         if(two_three(reach) || two_three(ureach))
             return neigh->ifp->cost;
