@@ -167,21 +167,21 @@ unsigned reach_bitmap_metric(const struct reach_bitmap *bitmap,
     
     // drop rate:
     //  at   0.0%:    1.0
-    //  at  10.0%:    2.0
-    //  at  16.0%:    8.0
-    //  at  20.0%:   40.0
+    //  at  10.0%:    6.0
+    //  at  16.0%:   24.0
+    //  at  20.0%:   80.0
     //  at 100.0%: 1000.0
     long long drop_of_1e4 = (long long)(bitmap->count - bitmap->count_set)
         * 10000 / (bitmap->count);
     long multipler_1e4;
     if (drop_of_1e4 < 1000) {
-        multipler_1e4 = 10000 + 10 * drop_of_1e4;
+        multipler_1e4 = 10000 + 50 * drop_of_1e4;
     } else if (drop_of_1e4 < 1600) {
-        multipler_1e4 = 20000 + 100 * (drop_of_1e4 - 1000);
+        multipler_1e4 = 60000 + 300 * (drop_of_1e4 - 1000);
     } else if (drop_of_1e4 < 2000) {
-        multipler_1e4 = 80000 + 80000 * (drop_of_1e4 - 1600);
+        multipler_1e4 = 240000 + 700 * (drop_of_1e4 - 1600);
     } else {
-        multipler_1e4 = 400000 + 120000 * (drop_of_1e4 - 2000);
+        multipler_1e4 = 800000 + 1150 * (drop_of_1e4 - 2000);
     }
 
     if (multipler_1e4 < last_minval) {
