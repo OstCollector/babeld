@@ -109,6 +109,7 @@ find_neighbour(const unsigned char *address, struct interface *ifp)
     neigh->ifp = ifp;
     neigh->buf.buf = buf;
     neigh->buf.size = ifp->buf.size;
+    neigh->buf.hello = -1;
     neigh->buf.flush_interval = ifp->buf.flush_interval;
     neigh->buf.sin6.sin6_family = AF_INET6;
     memcpy(&neigh->buf.sin6.sin6_addr, address, 16);
@@ -130,12 +131,13 @@ update_neighbour(struct neighbour *neigh, struct hello_history *hist,
     int rc = 0;
 
     if(hello < 0) {
-        if(hist->interval <= 0)
-            return rc;
-        missed_hellos =
-            ((int)timeval_minus_msec(&now, &hist->time) -
-             hist->interval * 7) /
-            (hist->interval * 10);
+        if(hist->interval > 0)
+            missed_hellos =
+                ((int)timeval_minus_msec(&now, &hist->time) -
+                 hist->interval * 7) /
+                (hist->interval * 10);
+        else
+            missed_hellos = 16; /* infinity */
         if(missed_hellos <= 0)
             return rc;
         timeval_add_msec(&hist->time, &hist->time,
@@ -198,7 +200,6 @@ update_neighbour(struct neighbour *neigh, struct hello_history *hist,
             send_self_update(neigh->ifp);
         }
     }
-
     return rc;
 }
 

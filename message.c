@@ -146,7 +146,7 @@ parse_update_subtlv(struct interface *ifp, int metric, int ae,
             continue;
         }
 
-        if(i + 1 > alen)
+        if(i + 2 > alen)
             goto fail;
         len = a[i + 1];
         if(i + len + 2 > alen)
@@ -203,7 +203,7 @@ parse_hello_subtlv(const unsigned char *a, int alen,
             continue;
         }
 
-        if(i + 1 > alen) {
+        if(i + 2 > alen) {
             fprintf(stderr, "Received truncated sub-TLV on Hello.\n");
             return -1;
         }
@@ -257,7 +257,7 @@ parse_ihu_subtlv(const unsigned char *a, int alen,
             continue;
         }
 
-        if(i + 1 > alen) {
+        if(i + 2 > alen) {
             fprintf(stderr, "Received truncated sub-TLV on IHU.\n");
             return -1;
         }
@@ -314,11 +314,11 @@ parse_request_subtlv(int ae, const unsigned char *a, int alen,
             continue;
         }
 
-        if(i + 1 > alen)
+        if(i + 2 > alen)
             goto fail;
 
         len = a[i + 1];
-        if(i + len > alen)
+        if(i + 2 + len > alen)
             goto fail;
 
         if(type == SUBTLV_PADN) {
@@ -367,7 +367,7 @@ parse_seqno_request_subtlv(int ae, const unsigned char *a, int alen,
             continue;
         }
 
-        if(i + 1 > alen)
+        if(i + 2 > alen)
             goto fail;
         len = a[i + 1];
         if(i + len + 2 > alen)
@@ -413,10 +413,10 @@ parse_other_subtlv(const unsigned char *a, int alen)
             continue;
         }
 
-        if(i + 1 > alen)
+        if(i + 2 > alen)
             goto fail;
         len = a[i + 1];
-        if(i + len > alen)
+        if(i + 2 + len > alen)
             goto fail;
 
         if((type & 0x80) != 0) {
@@ -480,18 +480,18 @@ parse_packet(const unsigned char *from, struct interface *ifp,
         return;
     }
 
-    neigh = find_neighbour(from, ifp);
-    if(neigh == NULL) {
-        fprintf(stderr, "Couldn't allocate neighbour.\n");
-        return;
-    }
-
     DO_NTOHS(bodylen, packet + 2);
 
     if(bodylen + 4 > packetlen) {
         fprintf(stderr, "Received truncated packet (%d + 4 > %d).\n",
                 bodylen, packetlen);
         bodylen = packetlen - 4;
+    }
+
+    neigh = find_neighbour(from, ifp);
+    if(neigh == NULL) {
+        fprintf(stderr, "Couldn't allocate neighbour.\n");
+        return;
     }
 
     i = 0;
@@ -504,7 +504,7 @@ parse_packet(const unsigned char *from, struct interface *ifp,
             i++;
             continue;
         }
-        if(i + 1 > bodylen) {
+        if(i + 2 > bodylen) {
             fprintf(stderr, "Received truncated message.\n");
             break;
         }
@@ -702,18 +702,7 @@ parse_packet(const unsigned char *from, struct interface *ifp,
                    (message[3] & 0x40) ? "/id" : "",
                    format_prefix(prefix, plen),
                    format_address(from), ifp->name);
-            if(message[2] == 0) {
-                rc = parse_other_subtlv(message + 12, len - 10);
-                if(rc < 0)
-                    goto done;
-                if(metric < 0xFFFF) {
-                    fprintf(stderr,
-                            "Received wildcard update with finite metric.\n");
-                    goto done;
-                }
-                retract_neighbour_routes(neigh);
-                goto done;
-            } else if(message[2] == 1) {
+            if(message[2] == 1) {
                 if(!have_v4_nh)
                     goto fail;
                 nh = v4_nh;
@@ -729,6 +718,22 @@ parse_packet(const unsigned char *from, struct interface *ifp,
                                      src_prefix, &src_plen);
             if(rc < 0)
                 goto done;
+
+            if(message[2] == 0) {
+                if(metric < 0xFFFF) {
+                    fprintf(stderr,
+                            "Received wildcard update with finite metric.\n");
+                    goto done;
+                }
+                if(src_plen > 0) {
+                    fprintf(stderr,
+                            "Received wildcard update with source prefix.\n");
+                    goto done;
+                }
+                retract_neighbour_routes(neigh);
+                goto done;
+            }
+
             is_ss = !is_default(src_prefix, src_plen);
             debugf("Received update%s%s for dst %s%s%s from %s on %s.\n",
                    (message[3] & 0x80) ? "/prefix" : "",
@@ -1019,45 +1024,86 @@ send_ack(struct neighbour *neigh, unsigned short nonce, unsigned short interval)
     schedule_flush_ms(&neigh->buf, roughly(interval * 6));
 }
 
-void
-send_hello_noihu(struct interface *ifp, unsigned interval)
+static void
+buffer_hello(struct buffered *buf, struct interface *ifp,
+             unsigned short seqno, unsigned interval, int unicast)
 {
+    int timestamp = !!(ifp->flags & IF_TIMESTAMPS);
+    start_message(buf, ifp, MESSAGE_HELLO, timestamp ? 12 : 6);
+    buf->hello = buf->len - 2;
+    accumulate_short(buf, unicast ? 0x8000 : 0);
+    accumulate_short(buf, seqno);
+    accumulate_short(buf, interval > 0xFFFF ? 0xFFFF : interval);
+    if(timestamp) {
+        /* Sub-TLV containing the local time of emission. We use a
+           Pad4 sub-TLV, which we'll fill just before sending. */
+        accumulate_byte(buf, SUBTLV_PADN);
+        accumulate_byte(buf, 4);
+        accumulate_int(buf, 0);
+    }
+    end_message(&ifp->buf, MESSAGE_HELLO, timestamp ? 12 : 6);
+}
+
+void
+send_multicast_hello(struct interface *ifp, unsigned interval, int force)
+{
+    if(!if_up(ifp))
+        return;
+
+    if(interval == 0 && (ifp->flags & IF_RFC6126) != 0)
+        /* Unscheduled hellos are incompatible with RFC 6126. */
+        return;
+
     /* This avoids sending multiple hellos in a single packet, which breaks
        link quality estimation. */
     if(ifp->buf.hello >= 0) {
-        flushupdates(ifp);
-        flushbuf(&ifp->buf, ifp);
+        if(force) {
+            flushupdates(ifp);
+            flushbuf(&ifp->buf, ifp);
+        } else {
+            return;
+        }
     }
 
     ifp->hello_seqno = seqno_plus(ifp->hello_seqno, 1);
-    set_timeout(&ifp->hello_timeout, ifp->hello_interval);
-
-    if(!if_up(ifp))
-        return;
+    if(interval > 0)
+        set_timeout(&ifp->hello_timeout, ifp->hello_interval);
 
     debugf("Sending hello %d (%d) to %s.\n",
            ifp->hello_seqno, interval, ifp->name);
 
-    start_message(&ifp->buf, ifp, MESSAGE_HELLO,
-                  (ifp->flags & IF_TIMESTAMPS) ? 12 : 6);
-    ifp->buf.hello = ifp->buf.len - 2;
-    accumulate_short(&ifp->buf, 0);
-    accumulate_short(&ifp->buf, ifp->hello_seqno);
-    accumulate_short(&ifp->buf, interval > 0xFFFF ? 0xFFFF : interval);
-    if((ifp->flags & IF_TIMESTAMPS) != 0) {
-        /* Sub-TLV containing the local time of emission. We use a
-           Pad4 sub-TLV, which we'll fill just before sending. */
-        accumulate_byte(&ifp->buf, SUBTLV_PADN);
-        accumulate_byte(&ifp->buf, 4);
-        accumulate_int(&ifp->buf, 0);
+    buffer_hello(&ifp->buf, ifp, ifp->hello_seqno, interval, 0);
+}
+
+void
+send_unicast_hello(struct neighbour *neigh, unsigned interval, int force)
+{
+    if(!if_up(neigh->ifp))
+        return;
+
+    if((neigh->ifp->flags & IF_RFC6126) != 0)
+        /* Unicast hellos are incompatible with RFC 6126. */
+        return;
+
+    if(neigh->buf.hello >= 0) {
+        if(force)
+            flushbuf(&neigh->buf, neigh->ifp);
+        else
+            return;
     }
-    end_message(&ifp->buf, MESSAGE_HELLO, (ifp->flags & IF_TIMESTAMPS) ? 12 : 6);
+
+    neigh->hello_seqno = seqno_plus(neigh->hello_seqno, 1);
+
+    debugf("Sending unicast hello %d (%d) on %s.\n",
+           neigh->hello_seqno, interval, neigh->ifp->name);
+
+    buffer_hello(&neigh->buf, neigh->ifp, neigh->hello_seqno, interval, 1);
 }
 
 void
 send_hello(struct interface *ifp)
 {
-    send_hello_noihu(ifp, (ifp->hello_interval + 9) / 10);
+    send_multicast_hello(ifp, (ifp->hello_interval + 9) / 10, 1);
     /* Send full IHU every 3 hellos, and marginal IHU each time */
     if(ifp->hello_seqno % 3 == 0)
         send_ihu(NULL, ifp);
@@ -1611,7 +1657,7 @@ buffer_ihu(struct buffered *buf, struct interface *ifp, unsigned short rxcost,
     int msglen, ll;
 
     ll = linklocal(address);
-    msglen = (ll ? 14 : 200) + (rtt_data ? 10 : 0);
+    msglen = (ll ? 14 : 22) + (rtt_data ? 10 : 0);
 
     start_message(buf, ifp, MESSAGE_IHU, msglen);
     accumulate_byte(buf, ll ? 3 : 2);
@@ -1637,6 +1683,7 @@ send_ihu(struct neighbour *neigh, struct interface *ifp)
 {
     int rxcost, interval;
     int send_rtt_data;
+    int unicast;
 
     if(neigh == NULL && ifp == NULL) {
         struct interface *ifp_aux;
@@ -1672,7 +1719,14 @@ send_ihu(struct neighbour *neigh, struct interface *ifp)
            neigh->ifp->name,
            format_address(neigh->address));
 
-    if((ifp->flags & IF_TIMESTAMPS) != 0 && neigh->hello_send_us &&
+    /* If we already have unicast data buffered for this peer, piggyback
+       the IHU.  Only do that if RFC 6126 compatibility is disabled, since
+       doing that might require sending an unscheduled unicast Hello. */
+    unicast = !!(ifp->flags & IF_UNICAST) ||
+        (neigh->buf.len > 0 && !(ifp->flags & IF_RFC6126));
+
+
+    if(!!(ifp->flags & IF_TIMESTAMPS) != 0 && neigh->hello_send_us &&
        /* Checks whether the RTT data is not too old to be sent. */
        timeval_minus_msec(&now, &neigh->hello_rtt_receive_time) < 1000000) {
         send_rtt_data = 1;
@@ -1681,7 +1735,16 @@ send_ihu(struct neighbour *neigh, struct interface *ifp)
         send_rtt_data = 0;
     }
 
-    buffer_ihu((ifp->flags & IF_UNICAST) != 0 ? &neigh->buf : &ifp->buf,
+    if(send_rtt_data) {
+        /* Ensure that there is a Hello in the same packet. */
+        ensure_space(unicast ? &neigh->buf : &ifp->buf, ifp, 14 + 16);
+        if(unicast)
+            send_unicast_hello(neigh, 0, 0);
+        else
+            send_multicast_hello(ifp, 0, 0);
+    }
+
+    buffer_ihu(unicast ? &neigh->buf : &ifp->buf,
                ifp, rxcost, interval, neigh->address,
                send_rtt_data, neigh->hello_send_us,
                time_us(neigh->hello_rtt_receive_time));

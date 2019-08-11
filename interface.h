@@ -61,7 +61,7 @@ struct interface_conf {
 #define CONFIG_YES 2
 
 /* Interface is up. */
-# define IF_UP (1 << 0)
+#define IF_UP (1 << 0)
 /* Interface known to be wireless, unknown otherwise. */
 #define IF_WIRELESS (1<<1)
 /* Apply split horizon. */
@@ -76,6 +76,8 @@ struct interface_conf {
 #define IF_TIMESTAMPS (1 << 6)
 /* Remain compatible with RFC 6126. */
 #define IF_RFC6126 (1 << 7)
+/* Use Babel over DTLS on this interface. */
+#define IF_DTLS (1 << 9)
 
 /* Only INTERFERING can appear on the wire. */
 #define IF_CHANNEL_UNKNOWN 0
@@ -149,6 +151,6 @@ int flush_interface(char *ifname);
 unsigned jitter(struct buffered *buf, int urgent);
 unsigned update_jitter(struct interface *ifp, int urgent);
 void set_timeout(struct timeval *timeout, int msecs);
-int interface_up(struct interface *ifp, int up);
+int interface_updown(struct interface *ifp, int up);
 int interface_ll_address(struct interface *ifp, const unsigned char *address);
 void check_interfaces(void);

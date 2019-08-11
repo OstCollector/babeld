@@ -43,6 +43,8 @@ THE SOFTWARE.
 #include "local.h"
 #include "xroute.h"
 
+#define MIN_MTU 512
+
 struct interface *interfaces = NULL;
 
 static struct interface *
@@ -109,7 +111,7 @@ flush_interface(char *ifname)
     if(ifp == NULL)
         return 0;
 
-    interface_up(ifp, 0);
+    interface_updown(ifp, 0);
     if(prev)
         prev->next = ifp->next;
     else
@@ -271,7 +273,7 @@ check_link_local_addresses(struct interface *ifp)
 }
 
 int
-interface_up(struct interface *ifp, int up)
+interface_updown(struct interface *ifp, int up)
 {
     int mtu, rc, type;
     struct ipv6_mreq mreq;
@@ -279,12 +281,8 @@ interface_up(struct interface *ifp, int up)
     if((!!up) == if_up(ifp))
         return 0;
 
-    if(up)
-        ifp->flags |= IF_UP;
-    else
-        ifp->flags &= ~IF_UP;
-
     if(up) {
+        ifp->flags |= IF_UP;
         if(ifp->ifindex <= 0) {
             fprintf(stderr,
                     "Upping unknown interface %s.\n", ifp->name);
@@ -306,19 +304,24 @@ interface_up(struct interface *ifp, int up)
 
         mtu = kernel_interface_mtu(ifp->name, ifp->ifindex);
         if(mtu < 0) {
-            fprintf(stderr, "Warning: couldn't get MTU of interface %s (%u).\n",
+            fprintf(stderr,
+                    "Warning: couldn't get MTU of interface %s (%u), "
+                    "using 1280\n",
                     ifp->name, ifp->ifindex);
             mtu = 1280;
         }
 
-        /* We need to be able to fit at least two messages into a packet,
-           so MTUs below 116 require lower layer fragmentation. */
-        /* In IPv6, the minimum MTU is 1280, and every host must be able
-           to reassemble up to 1500 bytes, but I'd rather not rely on this. */
-        if(mtu < 128) {
-            fprintf(stderr, "Suspiciously low MTU %d on interface %s (%u).\n",
-                    mtu, ifp->name, ifp->ifindex);
-            mtu = 128;
+        /* We need to be able to fit at least a router-ID and an update,
+           up to 116 bytes, and that's not counting sub-TLVs or crypto keys.
+           In IPv6, the minimum MTU is 1280, and every host must be able
+           to reassemble up to 1500 bytes.  In IPv4, every host must be
+           able to reassemble up to 576 bytes.  At any rate, the Babel spec
+           says that every node must be able to parse packets of size 512. */
+        if(mtu < MIN_MTU) {
+            fprintf(stderr,
+                    "Suspiciously low MTU %d on interface %s (%u), using %d.\n",
+                    mtu, ifp->name, ifp->ifindex, MIN_MTU);
+            mtu = 512;
         }
 
         if(ifp->buf.buf)
@@ -332,6 +335,7 @@ interface_up(struct interface *ifp, int up)
             ifp->buf.size = 0;
             goto fail;
         }
+        ifp->buf.hello = -1;
 
         rc = resize_receive_buffer(mtu);
         if(rc < 0)
@@ -483,6 +487,7 @@ interface_up(struct interface *ifp, int up)
             send_update(ifp, 0, NULL, 0, NULL, 0);
         send_multicast_request(ifp, NULL, 0, NULL, 0);
     } else {
+        ifp->flags &= ~IF_UP;
         flush_interface_routes(ifp, 0);
         ifp->buf.len = 0;
         ifp->buf.size = 0;
@@ -515,7 +520,7 @@ interface_up(struct interface *ifp, int up)
 
  fail:
     assert(up);
-    interface_up(ifp, 0);
+    interface_updown(ifp, 0);
     local_notify_interface(ifp, LOCAL_CHANGE);
     return -1;
 }
@@ -546,8 +551,7 @@ check_interfaces(void)
         ifindex = if_nametoindex(ifp->name);
         if(ifindex != ifp->ifindex) {
             debugf("Noticed ifindex change for %s.\n", ifp->name);
-            ifp->ifindex = 0;
-            interface_up(ifp, 0);
+            interface_updown(ifp, 0);
             ifp->ifindex = ifindex;
             ifindex_changed = 1;
         }
@@ -558,7 +562,7 @@ check_interfaces(void)
             rc = 0;
         if((rc > 0) != if_up(ifp)) {
             debugf("Noticed status change for %s.\n", ifp->name);
-            interface_up(ifp, rc > 0);
+            interface_updown(ifp, rc > 0);
         }
 
         if(if_up(ifp)) {

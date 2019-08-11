@@ -1,21 +1,37 @@
-babeld-1.9.0 (unreleased)
+4 August 2019: babeld-1.9.0
 
   * Reworked buffering of unicast packets to use a per-neighbour buffer
     rather than a single buffer per interface.  This makes unicast as
     efficient as multicast, at the cost of slightly higher memory usage.
   * Added option "unicast" that allows sending most TLVs over unicast.
     This is necessary for the DTLS extension.
+  * Implemented parsing of unicast Hellos.  This makes it possible to
+    interoperate with neighbours that only speak unicast (e.g. over some
+    kinds of tunnels that only do unicast).
+  * Implemented sending of unscheduled unicast Hellos.  This makes the
+    RTT extension work over unicast too.
   * Reworked the xroute data structures to use binary search and
     linear-time comparison.
   * Don't attempt to modify the rp_filter sysctl if it already has the
     desired value; this makes it possible to run babeld in an
     unpriviledged container.  Thanks to Christof Schulze.
   * Reinstated logging of late hellos.  Thanks to Dave Taht.
-  * Don't send wildcard requests to newish nodes.  Thanks to Teco Boot.
+  * Don't send wildcard requests or Hellos to newish nodes.  This makes
+    acquisition of new neighbours slower, but drastically reduces noise at
+    startup.  Thanks to Teco Boot.
   * Remove an arbitrary limit on the number of interfaces.  Thanks to
-    Christon Schulze.
+    Christof Schulze.
   * Removed class E from martian filter.  Thanks to Dave Taht.
-  * Don't send Hellos upon encountering a new neighbour.  Thanks to Teco Boot.
+  * Added the ability to set the preferred source address in install filters.
+    Thanks to Killian Lufau.
+  * Fixed a number of read-only buffer overflows.  Thanks to Leo Stefanesco.
+
+22 July 2019: babeld-1.8.5
+
+  * Fixed a bug that caused confustion between learned routes and
+    imported routes (thanks to Fabian Bläse).
+  * Fixed a bug that prevented install filters from being evaluated
+    (thanks to Killian Lufau).
 
 9 November 2018: babeld-1.8.4
 
