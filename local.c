@@ -156,6 +156,7 @@ local_notify_neighbour_1(struct local_socket *s,
     rc = snprintf(buf, 512,
                   "%s neighbour %lx address %s "
                   "if %s reach %04x ureach %04x "
+		  "miss rate: %.2f%% %.2f%% %.2f%% "
                   "rxcost %u txcost %u%s cost %u\n",
                   local_kind(kind),
                   /* Neighbours never move around in memory , so we can use the
@@ -165,6 +166,9 @@ local_notify_neighbour_1(struct local_socket *s,
                   neigh->ifp->name,
                   neigh->hello.reach,
                   neigh->uhello.reach,
+		  neigh->hello.missrate_ema[0] * 100.0,
+		  neigh->hello.missrate_ema[1] * 100.0,
+		  neigh->hello.missrate_ema[2] * 100.0,
                   neighbour_rxcost(neigh),
                   neighbour_txcost(neigh),
                   rttbuf,

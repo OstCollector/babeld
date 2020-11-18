@@ -129,6 +129,8 @@ update_neighbour(struct neighbour *neigh, struct hello_history *hist,
 {
     int missed_hellos;
     int rc = 0;
+    int i;
+    int bit;
 
     if(hello < 0) {
         if(hist->interval > 0)
@@ -149,15 +151,20 @@ update_neighbour(struct neighbour *neigh, struct hello_history *hist,
                 /* Probably a neighbour that rebooted and lost its seqno.
                    Reboot the universe. */
                 hist->reach = 0;
+                reset_missrate(hist);
                 missed_hellos = 0;
                 rc = 1;
             } else if(missed_hellos < 0) {
                 /* Late hello. Probably due to the link layer buffering
                    packets during a link outage or a cpu overload. */
-                   fprintf(stderr,
+                fprintf(stderr,
                         "Late hello: bufferbloated neighbor %s\n",
-                         format_address(neigh->address));
-                hist->reach <<= -missed_hellos;
+                        format_address(neigh->address));
+                for (i = 0; i < missed_hellos; ++i) {
+                    bit = (hist->reach >> 15) & 1;
+                    hist->reach <<= 1;
+                    pop_missrate_rxbit(hist, bit);
+                }
                 missed_hellos = 0;
                 rc = 1;
             }
@@ -171,10 +178,14 @@ update_neighbour(struct neighbour *neigh, struct hello_history *hist,
     }
 
     if(missed_hellos > 0) {
-        if((unsigned)missed_hellos >= sizeof(hist->reach) * 8)
+        if((unsigned)missed_hellos >= sizeof(hist->reach) * 8) {
             hist->reach = 0;
-        else
+        } else {
+            for (i = 0; i < missed_hellos; ++i) {
+                push_missrate_rxbit(hist, 0);
+            }
             hist->reach >>= missed_hellos;
+        }
         hist->seqno = seqno_plus(hist->seqno, missed_hellos);
         rc = 1;
     }
@@ -183,6 +194,7 @@ update_neighbour(struct neighbour *neigh, struct hello_history *hist,
         hist->seqno = hello;
         hist->reach >>= 1;
         hist->reach |= 0x8000;
+        push_missrate_rxbit(hist, 1);
         if((hist->reach & 0xFC00) != 0xFC00)
             rc = 1;
     }
@@ -283,25 +295,23 @@ neighbour_rxcost(struct neighbour *neigh)
     delay = timeval_minus_msec(&now, &neigh->hello.time);
     udelay = timeval_minus_msec(&now, &neigh->uhello.time);
 
-    if(((reach & 0xFFF0) == 0 || delay >= 180000) &&
-       ((ureach & 0xFFF0) == 0 || udelay >= 180000)) {
+    if (((reach & 0xFFF0) == 0 || delay >= 180000) &&
+            ((ureach & 0xFFF0) == 0 || udelay >= 180000)) {
         return INFINITY;
-    } else if((neigh->ifp->flags & IF_LQ)) {
-        int sreach =
-            ((reach & 0x8000) >> 2) +
-            ((reach & 0x4000) >> 1) +
-            (reach & 0x3FFF);
-        /* 0 <= sreach <= 0x7FFF */
-        int cost = (0x8000 * neigh->ifp->cost) / (sreach + 1);
-        /* cost >= interface->cost */
-        if(delay >= 40000)
-            cost = (cost * (delay - 20000) + 10000) / 20000;
-        return MIN(cost, INFINITY);
+    }
+    if (neigh->ifp->flags & IF_LQ) {
+        double cost = neigh->ifp->cost * calc_metric(&neigh->hello);
+        if (delay > 40000) {
+            cost = cost * (delay / 20000.0 - 1);
+        }
+        cost = MIN(cost, INFINITY);
+        return cost;
     } else {
-        if(two_three(reach) || two_three(ureach))
+        if (two_three(reach) || two_three(ureach)) {
             return neigh->ifp->cost;
-        else
+        } else {
             return INFINITY;
+        }
     }
 }
 
@@ -367,4 +377,48 @@ int
 valid_rtt(struct neighbour *neigh)
 {
     return (timeval_minus_msec(&now, &neigh->rtt_time) < 180000) ? 1 : 0;
+}
+
+/* exp(1/20), exp(1/120), exp(1/600) */
+const static double missrate_decay[3] = {
+    0.951229424500714, 0.991701292638876, 0.9983347214509387
+};
+
+void reset_missrate(struct hello_history *hist)
+{
+    hist->missrate_ema[0] = 1.0;
+    hist->missrate_ema[1] = 1.0;
+    hist->missrate_ema[2] = 1.0;
+}
+
+void push_missrate_rxbit(struct hello_history *hist, int reached)
+{
+    int i;
+    double val;
+    for (i = 0; i < 3; ++i) {
+        val = hist->missrate_ema[i] * missrate_decay[i] +
+            !reached * (1 - missrate_decay[i]);
+        hist->missrate_ema[i] = val > 1 ? 1 : val < 0 ? 0 : val;
+    }
+}
+
+void pop_missrate_rxbit(struct hello_history *hist, int reached)
+{
+    int i = 0;
+    double val;
+    for (i = 0; i < 3; ++i) {
+        val = hist->missrate_ema[i] - !reached * (1 - missrate_decay[i]);
+        val /= missrate_decay[i];
+        hist->missrate_ema[i] = val > 1 ? 1 : val < 0 ? 0 : val;
+    }
+}
+
+double calc_metric(struct hello_history *hist)
+{
+    double max = 0;
+    max = MAX(max, hist->missrate_ema[0]);
+    max = MAX(max, hist->missrate_ema[1]);
+    max = MAX(max, hist->missrate_ema[2]);
+
+    return 1.0 + max * max * 500;
 }
