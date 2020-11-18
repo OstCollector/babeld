@@ -20,9 +20,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
+typedef int short_2B[sizeof(short) == 2 ];
 struct hello_history {
     unsigned short reach;
+    double missrate_ema[3];
+
     unsigned short interval;    /* in centiseconds */
+
     int seqno;
     struct timeval time;
 };
@@ -48,6 +52,8 @@ struct neighbour {
     struct buffered buf;
 };
 
+
+
 extern struct neighbour *neighs;
 
 #define FOR_ALL_NEIGHBOURS(_neigh) \
@@ -65,3 +71,9 @@ unsigned neighbour_rxcost(struct neighbour *neigh);
 unsigned neighbour_rttcost(struct neighbour *neigh);
 unsigned neighbour_cost(struct neighbour *neigh);
 int valid_rtt(struct neighbour *neigh);
+
+/* period should be larger than 2 */
+void push_missrate_rxbit(struct hello_history *hist, int missed);
+void pop_missrate_rxbit(struct hello_history *hist, int missed);
+void reset_missrate(struct hello_history *hist);
+double calc_metric(struct hello_history *hist);
