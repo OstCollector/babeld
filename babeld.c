@@ -1120,15 +1120,15 @@ dump_tables(FILE *out)
 
     FOR_ALL_NEIGHBOURS(neigh) {
         fprintf(out, "Neighbour %s dev %s reach %04x ureach %04x "
-		"miss rate: %.2f%% %.2f%% %.2f%% "
+                "miss rate: %.2f%% %.2f%% %.2f%% "
                 "rxcost %u txcost %d rtt %s rttcost %u chan %d%s.\n",
                 format_address(neigh->address),
                 neigh->ifp->name,
                 neigh->hello.reach,
                 neigh->uhello.reach,
-		neigh->hello.missrate_ema[0] * 100.0,
-		neigh->hello.missrate_ema[1] * 100.0,
-		neigh->hello.missrate_ema[2] * 100.0,
+                neigh->hello.missrate_ema[0] * 100.0,
+                neigh->hello.missrate_ema[1] * 100.0,
+                neigh->hello.missrate_ema[2] * 100.0,
                 neighbour_rxcost(neigh),
                 neigh->txcost,
                 format_thousands(neigh->rtt),
