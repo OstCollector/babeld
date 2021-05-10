@@ -104,6 +104,8 @@ find_neighbour(const unsigned char *address, struct interface *ifp)
     neigh->txcost = INFINITY;
     neigh->ihu_time = now;
     neigh->hello.time = neigh->uhello.time = zero;
+    reset_missrate(&neigh->hello);
+    reset_missrate(&neigh->uhello);
     neigh->hello_rtt_receive_time = zero;
     neigh->rtt_time = zero;
     neigh->ifp = ifp;
@@ -379,9 +381,9 @@ valid_rtt(struct neighbour *neigh)
     return (timeval_minus_msec(&now, &neigh->rtt_time) < 180000) ? 1 : 0;
 }
 
-/* exp(1/20), exp(1/120), exp(1/600) */
+/* exp(1/20), exp(1/60), exp(1/240) */
 const static double missrate_decay[3] = {
-    0.951229424500714, 0.991701292638876, 0.9983347214509387
+    0.951229424500714, 0.9834714538216175, 0.99584200184511
 };
 
 void reset_missrate(struct hello_history *hist)
